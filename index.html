@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Ledger — Rent Invoices</title>
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%231B2A3A'/%3E%3Ctext x='50' y='68' font-size='54' text-anchor='middle' fill='%23C99A3E' font-family='Georgia,serif'%3E%C2%A3%3C/text%3E%3C/svg%3E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ledger">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;0,700;1,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --ink:#1B2A3A;
+    --paper:#F6F3EC;
+    --paper-raised:#FFFFFF;
+    --brass:#B8862F;
+    --brass-soft:#E8DCC0;
+    --line:#D9D2C0;
+    --red:#A8402E;
+    --green:#3E6B4E;
+    --muted:#6B6459;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:var(--ink);}
+  body{
+    font-family:'Lora',serif;
+    color:var(--ink);
+    display:flex;
+    justify-content:center;
+  }
+  #app{
+    width:100%;
+    max-width:480px;
+    min-height:100vh;
+    min-height:100dvh;
+    background:var(--paper);
+    display:flex;
+    flex-direction:column;
+    position:relative;
+  }
+  header.top{
+    padding:calc(env(safe-area-inset-top,0px) + 20px) 20px 16px;
+    background:var(--ink);
+    color:var(--paper);
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+  }
+  header.top h1{
+    font-size:21px;
+    margin:0;
+    font-weight:600;
+    letter-spacing:0.2px;
+  }
+  header.top .stamp{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    color:var(--brass);
+    border:1px solid var(--brass);
+    padding:3px 8px;
+    border-radius:2px;
+  }
+  main{flex:1;padding:18px 18px calc(90px + env(safe-area-inset-bottom,0px));overflow-y:auto;}
+  .card{
+    background:var(--paper-raised);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:16px;
+    margin-bottom:14px;
+  }
+  .card h2{
+    font-size:14px;
+    margin:0 0 12px;
+    font-weight:600;
+    color:var(--muted);
+  }
+  label{
+    display:block;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    color:var(--muted);
+    margin:12px 0 5px;
+  }
+  label:first-of-type{margin-top:0;}
+  input,select,textarea{
+    width:100%;
+    font-family:'Lora',serif;
+    font-size:15px;
+    padding:10px 11px;
+    border:1px solid var(--line);
+    border-radius:4px;
+    background:var(--paper);
+    color:var(--ink);
+  }
+  textarea{resize:vertical;min-height:60px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--brass);outline-offset:0;}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  button{
+    font-family:'Lora',serif;
+    font-weight:600;
+    font-size:14.5px;
+    border:none;
+    border-radius:5px;
+    padding:12px 16px;
+    cursor:pointer;
+  }
+  .btn-primary{background:var(--ink);color:var(--paper);width:100%;margin-top:16px;}
+  .btn-primary:disabled{opacity:0.45;}
+  .btn-ghost{background:transparent;color:var(--ink);border:1px solid var(--line);}
+  .btn-danger{background:transparent;color:var(--red);border:1px solid var(--red);font-size:12px;padding:6px 10px;}
+  .prop-item{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:11px 0;border-bottom:1px solid var(--line);
+  }
+  .prop-item:last-child{border-bottom:none;}
+  .prop-item .name{font-weight:600;font-size:15px;}
+  .prop-item .sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-top:2px;}
+  .empty{
+    text-align:center;color:var(--muted);font-size:13.5px;padding:24px 10px;font-style:italic;
+  }
+  .hist-item{padding:12px 0;border-bottom:1px solid var(--line);}
+  .hist-item:last-child{border-bottom:none;}
+  .hist-top{display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);}
+  .hist-amt{font-size:18px;font-weight:600;margin:3px 0 2px;}
+  .hist-actions{display:flex;gap:8px;margin-top:8px;}
+  .hist-actions button{font-size:11.5px;padding:6px 10px;}
+  .status-pill{
+    display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:10px;
+    padding:2px 7px;border-radius:10px;margin-left:6px;
+  }
+  .status-sent{background:#DFEBE2;color:var(--green);}
+  .status-failed{background:#F2DCD7;color:var(--red);}
+  nav.tabs{
+    position:absolute;bottom:0;left:0;right:0;
+    display:flex;background:var(--paper-raised);
+    border-top:1px solid var(--line);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  nav.tabs button{
+    flex:1;background:none;border-radius:0;padding:12px 4px 10px;
+    font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--muted);
+    display:flex;flex-direction:column;align-items:center;gap:4px;
+  }
+  nav.tabs button.active{color:var(--ink);}
+  nav.tabs .dot{width:5px;height:5px;border-radius:50%;background:var(--brass);opacity:0;}
+  nav.tabs button.active .dot{opacity:1;}
+  .view{display:none;}
+  .view.active{display:block;}
+  .banner{
+    font-family:'IBM Plex Mono',monospace;font-size:11.5px;
+    padding:10px 12px;border-radius:4px;margin-bottom:14px;
+  }
+  .banner.ok{background:#DFEBE2;color:var(--green);}
+  .banner.warn{background:#F3E9D2;color:#8A6414;}
+  .banner.err{background:#F2DCD7;color:var(--red);}
+  .helptext{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5;}
+  select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236B6459'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:30px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <h1>Ledger</h1>
+    <span class="stamp" id="propCountStamp">0 properties</span>
+  </header>
+
+  <main>
+    <!-- RECORD PAYMENT -->
+    <div class="view active" id="view-record">
+      <div id="recordBanner"></div>
+      <div class="card">
+        <h2>Record a payment</h2>
+        <div id="noPropsMsg" class="empty" style="display:none;">Add a property first, on the Properties tab.</div>
+        <div id="recordForm">
+          <label for="rp-property">Property</label>
+          <select id="rp-property"></select>
+
+          <div class="row2">
+            <div>
+              <label for="rp-amount">Amount received</label>
+              <input id="rp-amount" type="number" inputmode="decimal" placeholder="0.00">
+            </div>
+            <div>
+              <label for="rp-date">Date received</label>
+              <input id="rp-date" type="date">
+            </div>
+          </div>
+
+          <label for="rp-period">For period (shown on invoice)</label>
+          <input id="rp-period" type="text" placeholder="e.g. September 2026">
+
+          <label for="rp-method">Payment method</label>
+          <select id="rp-method">
+            <option>Bank transfer</option>
+            <option>Cash</option>
+            <option>Cheque</option>
+            <option>Other</option>
+          </select>
+
+          <button class="btn-primary" id="rp-generate">Generate &amp; send invoice</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTORY -->
+    <div class="view" id="view-history">
+      <div class="card">
+        <h2>Invoice history</h2>
+        <div id="historyList"><div class="empty">No invoices yet.</div></div>
+      </div>
+    </div>
+
+    <!-- PROPERTIES -->
+    <div class="view" id="view-properties">
+      <div class="card">
+        <h2>Your properties &amp; tenants</h2>
+        <div id="propList"><div class="empty">No properties added yet.</div></div>
+      </div>
+      <div class="card">
+        <h2>Add a property</h2>
+        <label for="pr-name">Property nickname</label>
+        <input id="pr-name" placeholder="e.g. 12 Elm Street, Flat 2">
+        <label for="pr-address">Full address (for the invoice)</label>
+        <textarea id="pr-address" placeholder="12 Elm Street, Flat 2, Manchester, M1 4AB"></textarea>
+        <label for="pr-tenant">Tenant name</label>
+        <input id="pr-tenant" placeholder="Jordan Smith">
+        <label for="pr-email">Tenant email</label>
+        <input id="pr-email" type="email" placeholder="jordan@example.com">
+        <label for="pr-rent">Usual rent amount (optional)</label>
+        <input id="pr-rent" type="number" inputmode="decimal" placeholder="0.00">
+        <button class="btn-primary" id="pr-add">Add property</button>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="view" id="view-settings">
+      <div class="card">
+        <h2>Landlord details (shown on every invoice)</h2>
+        <label for="st-name">Your name / business name</label>
+        <input id="st-name" placeholder="Sam Carter">
+        <label for="st-address">Your address</label>
+        <textarea id="st-address" placeholder="Correspondence address"></textarea>
+        <label for="st-email">Your email (reply-to)</label>
+        <input id="st-email" type="email" placeholder="you@example.com">
+        <label for="st-bank">Bank / payment details (optional, printed on invoice)</label>
+        <textarea id="st-bank" placeholder="Sort code, account number, or payment note"></textarea>
+      </div>
+
+      <div class="card">
+        <h2>Auto-email (EmailJS)</h2>
+        <div class="helptext">
+          Create a free account at emailjs.com, connect your email inbox as a "service," and add a template with variables:
+          <b>to_email, to_name, subject, message, invoice_number</b>. (Note: EmailJS's free plan can't attach the PDF —
+          this sends a text confirmation automatically, and you tap "Share invoice PDF now" to send the actual file yourself.)
+          Paste the three IDs below.
+        </div>
+        <label for="st-service">EmailJS Service ID</label>
+        <input id="st-service" placeholder="service_xxxxxxx">
+        <label for="st-template">EmailJS Template ID</label>
+        <input id="st-template" placeholder="template_xxxxxxx">
+        <label for="st-publickey">EmailJS Public Key</label>
+        <input id="st-publickey" placeholder="Public key from Account → API Keys">
+        <label for="st-privatekey">EmailJS Private Key (only if "Use Private Key" is on)</label>
+        <input id="st-privatekey" placeholder="Leave blank unless required">
+        <button class="btn-ghost" id="st-test" style="width:100%;margin-top:14px;">Send test email to myself</button>
+      </div>
+
+      <button class="btn-primary" id="st-save">Save settings</button>
+      <div id="settingsBanner" style="margin-top:12px;"></div>
+    </div>
+  </main>
+
+  <nav class="tabs">
+    <button data-view="record" class="active"><span>Record</span><span class="dot"></span></button>
+    <button data-view="history"><span>History</span><span class="dot"></span></button>
+    <button data-view="properties"><span>Properties</span><span class="dot"></span></button>
+    <button data-view="settings"><span>Settings</span><span class="dot"></span></button>
+  </nav>
+</div>
+
+<script>
+const { jsPDF } = window.jspdf;
+
+let state = { settings: {}, properties: [], payments: [] };
+
+async function loadState(){
+  try{ const v = localStorage.getItem('settings'); state.settings = v ? JSON.parse(v) : {}; }catch(e){ state.settings = {}; }
+  try{ const v = localStorage.getItem('properties'); state.properties = v ? JSON.parse(v) : []; }catch(e){ state.properties = []; }
+  try{ const v = localStorage.getItem('payments'); state.payments = v ? JSON.parse(v) : []; }catch(e){ state.payments = []; }
+}
+async function saveProperties(){ localStorage.setItem('properties', JSON.stringify(state.properties)); }
+async function savePayments(){ localStorage.setItem('payments', JSON.stringify(state.payments)); }
+async function saveSettings(){ localStorage.setItem('settings', JSON.stringify(state.settings)); }
+
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function money(n){ return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+// ---------- NAV ----------
+document.querySelectorAll('nav.tabs button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('view-'+btn.dataset.view).classList.add('active');
+    if(btn.dataset.view==='history') renderHistory();
+    if(btn.dataset.view==='properties') renderProperties();
+    if(btn.dataset.view==='record') renderRecordForm();
+  });
+});
+
+// ---------- PROPERTIES ----------
+function renderProperties(){
+  document.getElementById('propCountStamp').textContent = state.properties.length + (state.properties.length===1?' property':' properties');
+  const list = document.getElementById('propList');
+  if(state.properties.length===0){ list.innerHTML = '<div class="empty">No properties added yet.</div>'; return; }
+  list.innerHTML = state.properties.map(p=>`
+    <div class="prop-item">
+      <div>
+        <div class="name">${escapeHtml(p.name)}</div>
+        <div class="sub">${escapeHtml(p.tenant)} · ${escapeHtml(p.email)}</div>
+      </div>
+      <button class="btn-danger" data-del="${p.id}">Remove</button>
+    </div>`).join('');
+  list.querySelectorAll('[data-del]').forEach(b=>{
+    b.addEventListener('click', async ()=>{
+      if(!confirm('Remove this property? Past invoices stay in history.')) return;
+      state.properties = state.properties.filter(p=>p.id!==b.dataset.del);
+      await saveProperties();
+      renderProperties();
+      renderRecordForm();
+    });
+  });
+}
+
+document.getElementById('pr-add').addEventListener('click', async ()=>{
+  const name = document.getElementById('pr-name').value.trim();
+  const address = document.getElementById('pr-address').value.trim();
+  const tenant = document.getElementById('pr-tenant').value.trim();
+  const email = document.getElementById('pr-email').value.trim();
+  const rent = document.getElementById('pr-rent').value;
+  if(!name || !address || !tenant || !email){ alert('Please fill in name, address, tenant name, and tenant email.'); return; }
+  state.properties.push({ id: uid(), name, address, tenant, email, rent: rent || '' });
+  await saveProperties();
+  ['pr-name','pr-address','pr-tenant','pr-email','pr-rent'].forEach(id=>document.getElementById(id).value='');
+  renderProperties();
+  renderRecordForm();
+});
+
+// ---------- SETTINGS ----------
+function fillSettingsForm(){
+  const s = state.settings;
+  document.getElementById('st-name').value = s.landlordName || '';
+  document.getElementById('st-address').value = s.landlordAddress || '';
+  document.getElementById('st-email').value = s.landlordEmail || '';
+  document.getElementById('st-bank').value = s.bankDetails || '';
+  document.getElementById('st-service').value = s.emailjsServiceId || '';
+  document.getElementById('st-template').value = s.emailjsTemplateId || '';
+  document.getElementById('st-publickey').value = s.emailjsPublicKey || '';
+  document.getElementById('st-privatekey').value = s.emailjsPrivateKey || '';
+}
+document.getElementById('st-save').addEventListener('click', async ()=>{
+  state.settings = {
+    landlordName: document.getElementById('st-name').value.trim(),
+    landlordAddress: document.getElementById('st-address').value.trim(),
+    landlordEmail: document.getElementById('st-email').value.trim(),
+    bankDetails: document.getElementById('st-bank').value.trim(),
+    emailjsServiceId: document.getElementById('st-service').value.trim(),
+    emailjsTemplateId: document.getElementById('st-template').value.trim(),
+    emailjsPublicKey: document.getElementById('st-publickey').value.trim(),
+    emailjsPrivateKey: document.getElementById('st-privatekey').value.trim(),
+  };
+  await saveSettings();
+  const b = document.getElementById('settingsBanner');
+  b.innerHTML = '<div class="banner ok">Settings saved.</div>';
+  setTimeout(()=>b.innerHTML='', 2500);
+});
+
+document.getElementById('st-test').addEventListener('click', async ()=>{
+  const s = state.settings;
+  if(!s.emailjsServiceId || !s.emailjsTemplateId || !s.emailjsPublicKey || !s.landlordEmail){
+    document.getElementById('settingsBanner').innerHTML = '<div class="banner err">Fill in your email and all three EmailJS fields first.</div>';
+    return;
+  }
+  const b = document.getElementById('settingsBanner');
+  b.innerHTML = '<div class="banner warn">Sending test email…</div>';
+  const ok = await sendEmail({
+    to_email: s.landlordEmail,
+    to_name: s.landlordName || 'there',
+    subject: 'Ledger test email',
+    message: 'This is a test email from your rent invoice app. If you got this, auto-send is working.',
+    invoice_number: 'TEST',
+    pdf_base64: ''
+  });
+  b.innerHTML = ok ? '<div class="banner ok">Test email sent — check your inbox.</div>' : '<div class="banner err">Send failed. Double-check the IDs and that your EmailJS template has these variable names.</div>';
+});
+
+// ---------- RECORD PAYMENT ----------
+function renderRecordForm(){
+  const sel = document.getElementById('rp-property');
+  const noProps = document.getElementById('noPropsMsg');
+  const form = document.getElementById('recordForm');
+  if(state.properties.length===0){ noProps.style.display='block'; form.style.display='none'; return; }
+  noProps.style.display='none'; form.style.display='block';
+  sel.innerHTML = state.properties.map(p=>`<option value="${p.id}">${escapeHtml(p.name)} — ${escapeHtml(p.tenant)}</option>`).join('');
+  document.getElementById('rp-date').value = todayISO();
+  const chosen = state.properties.find(p=>p.id===sel.value);
+  document.getElementById('rp-amount').value = chosen && chosen.rent ? chosen.rent : '';
+  sel.onchange = ()=>{
+    const p = state.properties.find(pp=>pp.id===sel.value);
+    document.getElementById('rp-amount').value = p && p.rent ? p.rent : '';
+  };
+}
+
+function nextInvoiceNumber(){
+  const n = state.payments.length + 1;
+  return 'INV-' + new Date().getFullYear() + '-' + String(n).padStart(4,'0');
+}
+
+function buildInvoicePDF({property, amount, date, period, method, invoiceNumber}){
+  const doc = new jsPDF({unit:'pt', format:'a4'});
+  const s = state.settings;
+  const left = 56;
+  let y = 70;
+
+  doc.setFont('times','bold'); doc.setFontSize(22);
+  doc.text('RENT INVOICE', left, y);
+  doc.setFont('courier','normal'); doc.setFontSize(10);
+  doc.text(invoiceNumber, 540, y, {align:'right'});
+  y += 10;
+  doc.setDrawColor(180); doc.line(left, y, 540, y);
+  y += 30;
+
+  doc.setFont('times','bold'); doc.setFontSize(11);
+  doc.text('FROM', left, y);
+  doc.text('TO', 320, y);
+  y += 16;
+  doc.setFont('times','normal'); doc.setFontSize(11);
+  const fromLines = [s.landlordName||'', ...(s.landlordAddress||'').split('\n'), s.landlordEmail||''].filter(Boolean);
+  const toLines = [property.tenant, ...(property.address||'').split('\n'), property.email].filter(Boolean);
+  const maxLines = Math.max(fromLines.length, toLines.length);
+  for(let i=0;i<maxLines;i++){
+    if(fromLines[i]) doc.text(fromLines[i], left, y);
+    if(toLines[i]) doc.text(toLines[i], 320, y);
+    y += 14;
+  }
+  y += 16;
+  doc.setDrawColor(220); doc.line(left, y, 540, y);
+  y += 26;
+
+  doc.setFont('times','bold'); doc.setFontSize(11);
+  doc.text('Date issued', left, y);
+  doc.text('Property', 200, y);
+  doc.text('Period', 400, y);
+  y += 16;
+  doc.setFont('times','normal');
+  doc.text(new Date(date+'T12:00:00').toLocaleDateString(undefined,{day:'numeric',month:'long',year:'numeric'}), left, y);
+  doc.text(property.name, 200, y, {maxWidth:180});
+  doc.text(period || '—', 400, y, {maxWidth:140});
+  y += 40;
+
+  doc.setFillColor(246,243,236);
+  doc.rect(left, y, 484, 70, 'F');
+  doc.setFont('times','bold'); doc.setFontSize(11);
+  doc.text('Amount received', left+16, y+26);
+  doc.setFont('courier','normal'); doc.setFontSize(10);
+  doc.text('via ' + method, left+16, y+44);
+  doc.setFont('times','bold'); doc.setFontSize(20);
+  doc.text(money(amount), 524, y+40, {align:'right'});
+  y += 70 + 34;
+
+  doc.setFont('times','italic'); doc.setFontSize(10.5);
+  doc.text('This confirms rent payment has been received in full for the period stated above.', left, y, {maxWidth:484});
+  y += 30;
+
+  if(s.bankDetails){
+    doc.setFont('times','bold'); doc.setFontSize(10);
+    doc.text('Payment details for reference', left, y); y+=14;
+    doc.setFont('courier','normal'); doc.setFontSize(9.5);
+    s.bankDetails.split('\n').forEach(line=>{ doc.text(line, left, y); y+=13; });
+  }
+
+  doc.setFont('times','normal'); doc.setFontSize(8.5); doc.setTextColor(140);
+  doc.text('Generated ' + new Date().toLocaleString(), left, 780);
+
+  return doc;
+}
+
+async function sendEmail({to_email, to_name, subject, message, invoice_number, pdf_base64}){
+  const s = state.settings;
+  try{
+    const body = {
+      service_id: s.emailjsServiceId,
+      template_id: s.emailjsTemplateId,
+      user_id: s.emailjsPublicKey,
+      template_params: { to_email, to_name, subject, message, invoice_number }
+    };
+    if(s.emailjsPrivateKey){ body.accessToken = s.emailjsPrivateKey; }
+    const res = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    return res.ok;
+  }catch(e){ return false; }
+}
+
+document.getElementById('rp-generate').addEventListener('click', async ()=>{
+  const btn = document.getElementById('rp-generate');
+  const banner = document.getElementById('recordBanner');
+  const propId = document.getElementById('rp-property').value;
+  const amount = document.getElementById('rp-amount').value;
+  const date = document.getElementById('rp-date').value;
+  const period = document.getElementById('rp-period').value.trim();
+  const method = document.getElementById('rp-method').value;
+  const property = state.properties.find(p=>p.id===propId);
+
+  if(!property || !amount || !date){ banner.innerHTML = '<div class="banner err">Fill in the amount and date.</div>'; return; }
+  if(!state.settings.landlordName){ banner.innerHTML = '<div class="banner err">Add your landlord details on the Settings tab first.</div>'; return; }
+
+  btn.disabled = true; btn.textContent = 'Generating…';
+  const invoiceNumber = nextInvoiceNumber();
+  const pdfDoc = buildInvoicePDF({property, amount, date, period, method, invoiceNumber});
+  const pdfBase64 = pdfDoc.output('datauristring').split(',')[1];
+
+  let emailStatus = 'skipped';
+  const s = state.settings;
+  if(s.emailjsServiceId && s.emailjsTemplateId && s.emailjsPublicKey){
+    btn.textContent = 'Sending…';
+    const ok = await sendEmail({
+      to_email: property.email,
+      to_name: property.tenant,
+      subject: `Rent invoice ${invoiceNumber} — ${property.name}`,
+      message: `Hi ${property.tenant},\n\nThis confirms we received your rent payment of ${money(amount)} for ${property.name}${period ? ' ('+period+')' : ''}. The invoice PDF will follow shortly.\n\nThanks,\n${s.landlordName}`,
+      invoice_number: invoiceNumber,
+      pdf_base64: pdfBase64
+    });
+    emailStatus = ok ? 'sent' : 'failed';
+  }
+
+  state.payments.unshift({
+    id: uid(), propertyId: property.id, propertyName: property.name, tenant: property.tenant, tenantEmail: property.email,
+    amount, date, period, method, invoiceNumber, emailStatus, pdfBase64
+  });
+  await savePayments();
+
+  btn.disabled = false; btn.textContent = 'Generate & send invoice';
+  document.getElementById('rp-amount').value = property.rent || '';
+  document.getElementById('rp-period').value = '';
+
+  const shareBtnHtml = `<button class="btn-ghost" id="rp-share-now" style="margin-top:8px;width:100%;">Share invoice PDF now</button>`;
+  if(emailStatus==='sent') banner.innerHTML = `<div class="banner ok">Invoice ${invoiceNumber} — confirmation emailed to ${escapeHtml(property.email)}. EmailJS's free plan can't attach the PDF, so send it yourself:${shareBtnHtml}</div>`;
+  else if(emailStatus==='failed') banner.innerHTML = `<div class="banner err">Invoice ${invoiceNumber} generated, but the email failed to send.${shareBtnHtml}</div>`;
+  else banner.innerHTML = `<div class="banner warn">Invoice ${invoiceNumber} generated. Add EmailJS details in Settings to enable auto-send.${shareBtnHtml}</div>`;
+  document.getElementById('rp-share-now').addEventListener('click', ()=> sharePdfBase64(pdfBase64, invoiceNumber + '.pdf'));
+});
+
+// ---------- HISTORY ----------
+function renderHistory(){
+  const list = document.getElementById('historyList');
+  if(state.payments.length===0){ list.innerHTML = '<div class="empty">No invoices yet.</div>'; return; }
+  list.innerHTML = state.payments.map(p=>`
+    <div class="hist-item">
+      <div class="hist-top">
+        <span>${p.invoiceNumber}</span>
+        <span>${new Date(p.date+'T12:00:00').toLocaleDateString()}</span>
+      </div>
+      <div class="hist-amt">${money(p.amount)}
+        ${p.emailStatus==='sent' ? '<span class="status-pill status-sent">emailed</span>' : ''}
+        ${p.emailStatus==='failed' ? '<span class="status-pill status-failed">failed</span>' : ''}
+      </div>
+      <div class="sub" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);">${escapeHtml(p.propertyName)} · ${escapeHtml(p.tenant)}</div>
+      <div class="hist-actions">
+        <button class="btn-ghost" data-share="${p.id}">Share PDF</button>
+        <button class="btn-ghost" data-dl="${p.id}">Download</button>
+        ${p.emailStatus==='failed' ? `<button class="btn-ghost" data-retry="${p.id}">Retry email</button>` : ''}
+      </div>
+    </div>`).join('');
+
+  list.querySelectorAll('[data-dl]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const p = state.payments.find(x=>x.id===b.dataset.dl);
+      downloadBase64Pdf(p.pdfBase64, p.invoiceNumber + '.pdf');
+    });
+  });
+  list.querySelectorAll('[data-share]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const p = state.payments.find(x=>x.id===b.dataset.share);
+      sharePdfBase64(p.pdfBase64, p.invoiceNumber + '.pdf');
+    });
+  });
+  list.querySelectorAll('[data-retry]').forEach(b=>{
+    b.addEventListener('click', async ()=>{
+      const p = state.payments.find(x=>x.id===b.dataset.retry);
+      b.textContent = 'Sending…'; b.disabled = true;
+      const ok = await sendEmail({
+        to_email: p.tenantEmail, to_name: p.tenant,
+        subject: `Rent invoice ${p.invoiceNumber} — ${p.propertyName}`,
+        message: `Hi ${p.tenant},\n\nResending your invoice ${p.invoiceNumber}.\n\nThanks.`,
+        invoice_number: p.invoiceNumber, pdf_base64: p.pdfBase64
+      });
+      p.emailStatus = ok ? 'sent' : 'failed';
+      await savePayments();
+      renderHistory();
+    });
+  });
+}
+
+function downloadBase64Pdf(base64, filename){
+  const link = document.createElement('a');
+  link.href = 'data:application/pdf;base64,' + base64;
+  link.download = filename;
+  link.click();
+}
+
+async function sharePdfBase64(base64, filename){
+  try{
+    const byteChars = atob(base64);
+    const byteArray = new Uint8Array(byteChars.length);
+    for(let i=0;i<byteChars.length;i++) byteArray[i] = byteChars.charCodeAt(i);
+    const file = new File([byteArray], filename, {type:'application/pdf'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:filename});
+    }else{
+      downloadBase64Pdf(base64, filename);
+    }
+  }catch(e){
+    if(e.name !== 'AbortError') downloadBase64Pdf(base64, filename);
+  }
+}
+
+function escapeHtml(str){
+  return String(str||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+// ---------- INIT ----------
+(async function init(){
+  await loadState();
+  fillSettingsForm();
+  renderProperties();
+  renderRecordForm();
+  renderHistory();
+})();
+</script>
+</body>
+</html>
