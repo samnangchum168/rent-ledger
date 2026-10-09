@@ -158,6 +158,7 @@
   .banner.err{background:#F2DCD7;color:var(--red);}
   .helptext{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5;}
   select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236B6459'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:30px;}
+  .dueday-select{width:auto;max-width:210px;padding:5px 26px 5px 8px;font-size:12px;margin-top:5px;}
 </style>
 </head>
 <body>
@@ -238,6 +239,8 @@
         <input id="pr-email" type="email" placeholder="jordan@example.com">
         <label for="pr-rent">Usual rent amount (optional)</label>
         <input id="pr-rent" type="number" inputmode="decimal" placeholder="0.00">
+        <label for="pr-dueday">Rent due day (for automatic reminders)</label>
+        <select id="pr-dueday"><option value="">Not set (no reminders)</option><option value="1">Day 1 of each month</option><option value="2">Day 2 of each month</option><option value="3">Day 3 of each month</option><option value="4">Day 4 of each month</option><option value="5">Day 5 of each month</option><option value="6">Day 6 of each month</option><option value="7">Day 7 of each month</option><option value="8">Day 8 of each month</option><option value="9">Day 9 of each month</option><option value="10">Day 10 of each month</option><option value="11">Day 11 of each month</option><option value="12">Day 12 of each month</option><option value="13">Day 13 of each month</option><option value="14">Day 14 of each month</option><option value="15">Day 15 of each month</option><option value="16">Day 16 of each month</option><option value="17">Day 17 of each month</option><option value="18">Day 18 of each month</option><option value="19">Day 19 of each month</option><option value="20">Day 20 of each month</option><option value="21">Day 21 of each month</option><option value="22">Day 22 of each month</option><option value="23">Day 23 of each month</option><option value="24">Day 24 of each month</option><option value="25">Day 25 of each month</option><option value="26">Day 26 of each month</option><option value="27">Day 27 of each month</option><option value="28">Day 28 of each month</option><option value="29">Day 29 of each month</option><option value="30">Day 30 of each month</option><option value="31">Day 31 of each month</option></select>
         <label for="pr-owner-name">Billed from name (optional — leave blank to use your details in Settings)</label>
         <input id="pr-owner-name" placeholder="e.g. your partner's name, for a jointly-owned property">
         <label for="pr-owner-email">Billed from email (optional)</label>
@@ -274,6 +277,21 @@
         <button class="btn-ghost" id="st-test" style="width:100%;margin-top:14px;">Send test email to myself</button>
       </div>
 
+      <div class="card">
+        <h2>Rent reminders</h2>
+        <div class="helptext">
+          Every morning (about 9am Melbourne time) your Netlify site emails each tenant a reminder 3 days before the
+          due date, on the due date, and 3 days after, but only while no payment covering that due date is recorded here.
+          Set each property's due day on the Properties tab. For this to work, the "Period covered" on a payment must
+          include the due date it pays for. Your records are copied to your Netlify site automatically so it can check.
+        </div>
+        <div id="syncStatus" style="margin-top:8px;"></div>
+        <button class="btn-ghost" id="st-sync" style="width:100%;margin-top:12px;">Sync data now</button>
+        <button class="btn-ghost" id="st-preview" style="width:100%;margin-top:10px;">Preview reminders</button>
+        <button class="btn-ghost" id="st-runnow" style="width:100%;margin-top:10px;">Send today's reminders now</button>
+        <div id="reminderOut" style="margin-top:12px;"></div>
+      </div>
+
       <button class="btn-primary" id="st-save">Save settings</button>
       <div id="settingsBanner" style="margin-top:12px;"></div>
     </div>
@@ -297,9 +315,10 @@ async function loadState(){
   try{ const v = localStorage.getItem('properties'); state.properties = v ? JSON.parse(v) : []; }catch(e){ state.properties = []; }
   try{ const v = localStorage.getItem('payments'); state.payments = v ? JSON.parse(v) : []; }catch(e){ state.payments = []; }
 }
-async function saveProperties(){ localStorage.setItem('properties', JSON.stringify(state.properties)); }
-async function savePayments(){ localStorage.setItem('payments', JSON.stringify(state.payments)); }
-async function saveSettings(){ localStorage.setItem('settings', JSON.stringify(state.settings)); }
+let syncTimer = null;
+async function saveProperties(){ localStorage.setItem('properties', JSON.stringify(state.properties)); scheduleSync(); }
+async function savePayments(){ localStorage.setItem('payments', JSON.stringify(state.payments)); scheduleSync(); }
+async function saveSettings(){ localStorage.setItem('settings', JSON.stringify(state.settings)); scheduleSync(); }
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function money(n){ return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -319,6 +338,12 @@ document.querySelectorAll('nav.tabs button').forEach(btn=>{
 });
 
 // ---------- PROPERTIES ----------
+function dueDayOptions(selected){
+  let html = '<option value="">Not set (no reminders)</option>';
+  for(let d=1; d<=31; d++){ html += `<option value="${d}" ${Number(selected)===d?'selected':''}>Day ${d} of each month</option>`; }
+  return html;
+}
+
 function renderProperties(){
   document.getElementById('propCountStamp').textContent = state.properties.length + (state.properties.length===1?' property':' properties');
   const list = document.getElementById('propList');
@@ -329,9 +354,18 @@ function renderProperties(){
         <div class="name">${escapeHtml(p.name)}</div>
         <div class="sub">${escapeHtml(p.tenant)} · ${escapeHtml(p.email)}</div>
         ${p.ownerName ? `<div class="sub">Billed from: ${escapeHtml(p.ownerName)}</div>` : ''}
+        <div class="sub">Rent due: <select class="dueday-select" data-dueday="${p.id}" aria-label="Rent due day">${dueDayOptions(p.dueDay)}</select></div>
       </div>
       <button class="btn-danger" data-del="${p.id}">Remove</button>
     </div>`).join('');
+  list.querySelectorAll('[data-dueday]').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const p = state.properties.find(x=>x.id===sel.dataset.dueday);
+      if(!p) return;
+      p.dueDay = sel.value ? Number(sel.value) : '';
+      await saveProperties();
+    });
+  });
   list.querySelectorAll('[data-del]').forEach(b=>{
     b.addEventListener('click', async ()=>{
       if(!confirm('Remove this property? Past invoices stay in history.')) return;
@@ -351,10 +385,11 @@ document.getElementById('pr-add').addEventListener('click', async ()=>{
   const rent = document.getElementById('pr-rent').value;
   const ownerName = document.getElementById('pr-owner-name').value.trim();
   const ownerEmail = document.getElementById('pr-owner-email').value.trim();
+  const dueDay = document.getElementById('pr-dueday').value;
   if(!name || !address || !tenant || !email){ alert('Please fill in name, address, tenant name, and tenant email.'); return; }
-  state.properties.push({ id: uid(), name, address, tenant, email, rent: rent || '', ownerName, ownerEmail });
+  state.properties.push({ id: uid(), name, address, tenant, email, rent: rent || '', ownerName, ownerEmail, dueDay: dueDay ? Number(dueDay) : '' });
   await saveProperties();
-  ['pr-name','pr-address','pr-tenant','pr-email','pr-rent','pr-owner-name','pr-owner-email'].forEach(id=>document.getElementById(id).value='');
+  ['pr-name','pr-address','pr-tenant','pr-email','pr-rent','pr-owner-name','pr-owner-email','pr-dueday'].forEach(id=>document.getElementById(id).value='');
   renderProperties();
   renderRecordForm();
 });
@@ -659,10 +694,122 @@ function escapeHtml(str){
   return String(str||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+// ---------- REMINDERS & SYNC ----------
+function apiUrl(){
+  const ep = (state.settings.functionEndpoint || '').trim();
+  return ep ? ep.replace(/send-invoice\/?$/, 'ledger-api') : '';
+}
+
+async function callApi(action, extra){
+  const s = state.settings;
+  const url = apiUrl();
+  if(!url || !s.sharedSecret) return { ok:false, error:'Add the Function URL and Shared secret above first, then tap Save settings.' };
+  if(!/ledger-api$/.test(url)) return { ok:false, error:'The Function URL should end with /send-invoice.' };
+  try{
+    const res = await fetch(url, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action, shared_secret: s.sharedSecret, ...extra })
+    });
+    const text = await res.text();
+    let data = null; try{ data = JSON.parse(text); }catch(e){}
+    if(res.ok && data && data.ok !== false) return { ok:true, data };
+    return { ok:false, status: res.status, error: (data && data.error) || ('Server replied ' + res.status + (res.status===404 ? ' (the reminder function is not deployed yet)' : '')) };
+  }catch(e){ return { ok:false, error:'Could not reach your Netlify site: ' + String(e.message||e) }; }
+}
+
+function buildSnapshot(){
+  const s = state.settings;
+  return {
+    settings: { landlordName: s.landlordName||'', landlordEmail: s.landlordEmail||'', bankDetails: s.bankDetails||'' },
+    properties: state.properties.map(p=>({ id:p.id, name:p.name, tenant:p.tenant, email:p.email, rent:p.rent||'', dueDay:p.dueDay||0, ownerName:p.ownerName||'', ownerEmail:p.ownerEmail||'' })),
+    payments: state.payments.map(p=>({ propertyId:p.propertyId, periodStart:p.periodStart||'', periodEnd:p.periodEnd||'', date:p.date||'', amount:p.amount||'' }))
+  };
+}
+
+function renderSyncStatus(err){
+  const el = document.getElementById('syncStatus');
+  if(!el) return;
+  if(err){ el.innerHTML = `<div class="banner err">${escapeHtml(err)}</div>`; return; }
+  let last = ''; try{ last = localStorage.getItem('lastSync') || ''; }catch(e){}
+  el.innerHTML = last
+    ? `<div class="helptext">Last synced: ${escapeHtml(new Date(last).toLocaleString())}</div>`
+    : '<div class="helptext">Not synced yet.</div>';
+}
+
+async function syncNow(opts){
+  const auto = opts && opts.auto;
+  if(state.properties.length===0){
+    const msg = 'Add a property first, then sync.';
+    if(!auto) renderSyncStatus(msg);
+    return { ok:false, error: msg };
+  }
+  const r = await callApi('sync', { data: buildSnapshot() });
+  if(r.ok){ try{ localStorage.setItem('lastSync', new Date().toISOString()); }catch(e){} renderSyncStatus(); }
+  else renderSyncStatus('Sync failed: ' + r.error);
+  return r;
+}
+
+function scheduleSync(){
+  const s = state.settings;
+  if(!s || !s.functionEndpoint || !s.sharedSecret) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(()=>{ syncNow({auto:true}); }, 800);
+}
+
+const STAGE_LABEL = { before:'3-day reminder', due:'Due-date reminder', overdue:'Overdue reminder' };
+const ACTION_LABEL = { 'sent':'Sent', 'would-send':'Would send', 'skipped-paid':'Skipped, payment recorded', 'already-sent':'Already sent', 'error':'Failed' };
+
+function renderReminderResult(d){
+  let html = '';
+  if(!d.upcoming || d.upcoming.length===0){
+    html += '<div class="banner warn">No properties have a rent due day set. Set one on the Properties tab.</div>';
+  }else{
+    html += d.upcoming.map(u=>{
+      const r = u.reminderDates;
+      return `<div class="hist-item">
+        <div style="font-weight:600;">${escapeHtml(u.property)}</div>
+        <div class="helptext">Next due ${fmtDate(u.dueDate)}: ${u.paid ? 'payment recorded, no reminders needed' : 'not yet paid'}.<br>
+        Reminders: ${fmtDate(r[0])} (3 days before), ${fmtDate(r[1])} (due date), ${fmtDate(r[2])} (3 days after).</div>
+      </div>`;
+    }).join('');
+  }
+  if(d.results && d.results.length){
+    html += d.results.map(x=>{
+      const kind = x.action==='sent' ? 'ok' : (x.action==='error' ? 'err' : 'warn');
+      return `<div class="banner ${kind}" style="margin-top:8px;">${escapeHtml(x.tenant)}: ${STAGE_LABEL[x.stage]||x.stage} for ${fmtDate(x.dueDate)}. ${ACTION_LABEL[x.action]||x.action}${x.error ? ' (' + escapeHtml(x.error) + ')' : ''}.</div>`;
+    }).join('');
+  }else if(d.upcoming && d.upcoming.length){
+    html += '<div class="banner warn" style="margin-top:8px;">Nothing is due for a reminder today.</div>';
+  }
+  return html;
+}
+
+async function runReminderCheck(dryRun){
+  const out = document.getElementById('reminderOut');
+  out.innerHTML = '<div class="banner warn">Checking…</div>';
+  const sync = await syncNow();
+  if(!sync.ok){ out.innerHTML = `<div class="banner err">${escapeHtml(sync.error || 'Sync failed')}</div>`; return; }
+  const r = await callApi('reminders', { dry_run: dryRun });
+  if(!r.ok){ out.innerHTML = `<div class="banner err">${escapeHtml(r.error)}</div>`; return; }
+  out.innerHTML = renderReminderResult(r.data);
+}
+
+document.getElementById('st-sync').addEventListener('click', async ()=>{
+  const out = document.getElementById('reminderOut');
+  out.innerHTML = '';
+  await syncNow();
+});
+document.getElementById('st-preview').addEventListener('click', ()=> runReminderCheck(true));
+document.getElementById('st-runnow').addEventListener('click', ()=>{
+  if(!confirm("Send any reminders that are due today? Tenants who are already paid up, or who were already reminded for that date, are skipped.")) return;
+  runReminderCheck(false);
+});
+
 // ---------- INIT ----------
 (async function init(){
   await loadState();
   fillSettingsForm();
+  renderSyncStatus();
   renderProperties();
   renderRecordForm();
   renderHistory();
