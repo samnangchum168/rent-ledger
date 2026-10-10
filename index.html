@@ -244,8 +244,16 @@
         <input id="pr-phone" type="tel" inputmode="tel" placeholder="0412 345 678">
         <label for="pr-rent">Usual rent amount (optional)</label>
         <input id="pr-rent" type="number" inputmode="decimal" placeholder="0.00">
+        <label for="pr-freq">How often is rent due?</label>
+        <select id="pr-freq"><option value="monthly">Monthly (same day each month)</option><option value="fortnightly">Fortnightly (every 2 weeks)</option><option value="weekly">Weekly (every week)</option></select>
+        <div id="pr-monthly-wrap">
         <label for="pr-dueday">Rent due day (for automatic reminders)</label>
         <select id="pr-dueday"><option value="">Not set (no reminders)</option><option value="1">Day 1 of each month</option><option value="2">Day 2 of each month</option><option value="3">Day 3 of each month</option><option value="4">Day 4 of each month</option><option value="5">Day 5 of each month</option><option value="6">Day 6 of each month</option><option value="7">Day 7 of each month</option><option value="8">Day 8 of each month</option><option value="9">Day 9 of each month</option><option value="10">Day 10 of each month</option><option value="11">Day 11 of each month</option><option value="12">Day 12 of each month</option><option value="13">Day 13 of each month</option><option value="14">Day 14 of each month</option><option value="15">Day 15 of each month</option><option value="16">Day 16 of each month</option><option value="17">Day 17 of each month</option><option value="18">Day 18 of each month</option><option value="19">Day 19 of each month</option><option value="20">Day 20 of each month</option><option value="21">Day 21 of each month</option><option value="22">Day 22 of each month</option><option value="23">Day 23 of each month</option><option value="24">Day 24 of each month</option><option value="25">Day 25 of each month</option><option value="26">Day 26 of each month</option><option value="27">Day 27 of each month</option><option value="28">Day 28 of each month</option><option value="29">Day 29 of each month</option><option value="30">Day 30 of each month</option><option value="31">Day 31 of each month</option></select>
+        </div>
+        <div id="pr-anchor-wrap" style="display:none;">
+        <label for="pr-anchor">A date rent is due (the next one, or any past one; reminders repeat from it)</label>
+        <input id="pr-anchor" type="date">
+        </div>
         <label for="pr-pay">Payment details for this property (optional; blank uses the default in Settings)</label>
         <textarea id="pr-pay" placeholder="e.g. BSB 000-000, Account 12345678, Name: Sam Carter"></textarea>
         <label for="pr-owner-name">Billed from name (optional — leave blank to use your details in Settings)</label>
@@ -331,7 +339,7 @@ async function saveSettings(){ localStorage.setItem('settings', JSON.stringify(s
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function money(n){ return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 
 // ---------- NAV ----------
 document.querySelectorAll('nav.tabs button').forEach(btn=>{
@@ -347,6 +355,11 @@ document.querySelectorAll('nav.tabs button').forEach(btn=>{
 });
 
 // ---------- PROPERTIES ----------
+function freqOptions(selected){
+  const f = (selected==='weekly'||selected==='fortnightly') ? selected : 'monthly';
+  return [['monthly','Monthly'],['fortnightly','Fortnightly'],['weekly','Weekly']]
+    .map(([v,l])=>`<option value="${v}" ${f===v?'selected':''}>${l}</option>`).join('');
+}
 function dueDayOptions(selected){
   let html = '<option value="">Not set (no reminders)</option>';
   for(let d=1; d<=31; d++){ html += `<option value="${d}" ${Number(selected)===d?'selected':''}>Day ${d} of each month</option>`; }
@@ -363,7 +376,10 @@ function renderProperties(){
         <div class="name">${escapeHtml(p.name)}</div>
         <div class="sub">${escapeHtml(p.tenant)} · ${escapeHtml(p.email)}</div>
         ${p.ownerName ? `<div class="sub">Billed from: ${escapeHtml(p.ownerName)}</div>` : ''}
-        <div class="sub">Rent due: <select class="dueday-select" data-dueday="${p.id}" aria-label="Rent due day">${dueDayOptions(p.dueDay)}</select></div>
+        <div class="sub">Rent due: <select class="dueday-select" data-freq="${p.id}" aria-label="How often rent is due">${freqOptions(p.frequency)}</select></div>
+        ${(p.frequency==='weekly'||p.frequency==='fortnightly')
+          ? `<div class="sub" style="margin-top:6px;">A due date (reminders repeat from it)<br><input type="date" class="dueday-select" data-anchor="${p.id}" aria-label="A date rent is due for ${escapeHtml(p.name)}" value="${escapeHtml(p.anchorDate||'')}"></div>`
+          : `<div class="sub" style="margin-top:6px;"><select class="dueday-select" data-dueday="${p.id}" aria-label="Rent due day">${dueDayOptions(p.dueDay)}</select></div>`}
         <div class="sub" style="margin-top:8px;">Tenant mobile (for text reminders)</div>
         <input class="prop-phone" type="tel" inputmode="tel" data-phone="${p.id}" aria-label="Tenant mobile for ${escapeHtml(p.name)}" placeholder="0412 345 678" value="${escapeHtml(p.phone||'')}">
         <div class="sub" style="margin-top:8px;">Payment details for this property</div>
@@ -371,6 +387,23 @@ function renderProperties(){
       </div>
       <button class="btn-danger" data-del="${p.id}">Remove</button>
     </div>`).join('');
+  list.querySelectorAll('[data-freq]').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const p = state.properties.find(x=>x.id===sel.dataset.freq);
+      if(!p) return;
+      p.frequency = sel.value;
+      await saveProperties();
+      renderProperties();
+    });
+  });
+  list.querySelectorAll('[data-anchor]').forEach(inp=>{
+    inp.addEventListener('change', async ()=>{
+      const p = state.properties.find(x=>x.id===inp.dataset.anchor);
+      if(!p) return;
+      p.anchorDate = inp.value || '';
+      await saveProperties();
+    });
+  });
   list.querySelectorAll('[data-dueday]').forEach(sel=>{
     sel.addEventListener('change', async ()=>{
       const p = state.properties.find(x=>x.id===sel.dataset.dueday);
@@ -406,6 +439,13 @@ function renderProperties(){
   });
 }
 
+function syncFreqForm(){
+  const monthly = document.getElementById('pr-freq').value==='monthly';
+  document.getElementById('pr-monthly-wrap').style.display = monthly ? 'block' : 'none';
+  document.getElementById('pr-anchor-wrap').style.display = monthly ? 'none' : 'block';
+}
+document.getElementById('pr-freq').addEventListener('change', syncFreqForm);
+
 document.getElementById('pr-add').addEventListener('click', async ()=>{
   const name = document.getElementById('pr-name').value.trim();
   const address = document.getElementById('pr-address').value.trim();
@@ -415,12 +455,15 @@ document.getElementById('pr-add').addEventListener('click', async ()=>{
   const ownerName = document.getElementById('pr-owner-name').value.trim();
   const ownerEmail = document.getElementById('pr-owner-email').value.trim();
   const dueDay = document.getElementById('pr-dueday').value;
+  const frequency = document.getElementById('pr-freq').value;
+  const anchorDate = document.getElementById('pr-anchor').value;
   const paymentDetails = document.getElementById('pr-pay').value.trim();
   const phone = document.getElementById('pr-phone').value.trim();
   if(!name || !address || !tenant || !email){ alert('Please fill in name, address, tenant name, and tenant email.'); return; }
-  state.properties.push({ id: uid(), name, address, tenant, email, rent: rent || '', ownerName, ownerEmail, paymentDetails, phone, dueDay: dueDay ? Number(dueDay) : '' });
+  state.properties.push({ id: uid(), name, address, tenant, email, rent: rent || '', ownerName, ownerEmail, paymentDetails, phone, frequency, anchorDate: frequency==='monthly' ? '' : anchorDate, dueDay: dueDay ? Number(dueDay) : '' });
   await saveProperties();
-  ['pr-name','pr-address','pr-tenant','pr-email','pr-rent','pr-owner-name','pr-owner-email','pr-dueday','pr-pay','pr-phone'].forEach(id=>document.getElementById(id).value='');
+  ['pr-name','pr-address','pr-tenant','pr-email','pr-rent','pr-owner-name','pr-owner-email','pr-dueday','pr-pay','pr-phone','pr-anchor'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('pr-freq').value='monthly'; syncFreqForm();
   renderProperties();
   renderRecordForm();
 });
@@ -481,16 +524,39 @@ function renderRecordForm(){
   sel.innerHTML = state.properties.map(p=>`<option value="${p.id}">${escapeHtml(p.name)} — ${escapeHtml(p.tenant)}</option>`).join('');
   document.getElementById('rp-date').value = todayISO();
   const today = new Date();
-  const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0,10);
-  const lastOfMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).toISOString().slice(0,10);
+  const localISO = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const firstOfMonth = localISO(new Date(today.getFullYear(), today.getMonth(), 1));
+  const lastOfMonth = localISO(new Date(today.getFullYear(), today.getMonth()+1, 0));
   document.getElementById('rp-period-start').value = firstOfMonth;
   document.getElementById('rp-period-end').value = lastOfMonth;
   const chosen = state.properties.find(p=>p.id===sel.value);
   document.getElementById('rp-amount').value = chosen && chosen.rent ? chosen.rent : '';
+  applyDefaultPeriod(chosen, firstOfMonth, lastOfMonth);
   sel.onchange = ()=>{
     const p = state.properties.find(pp=>pp.id===sel.value);
     document.getElementById('rp-amount').value = p && p.rent ? p.rent : '';
+    applyDefaultPeriod(p, firstOfMonth, lastOfMonth);
   };
+}
+
+// Weekly / fortnightly properties: default "period covered" to the first cycle that has no payment recorded yet.
+function isoToMs(d){ const [y,m,day]=d.split('-').map(Number); return Date.UTC(y,m-1,day); }
+function msToIso(ms){ return new Date(ms).toISOString().slice(0,10); }
+function applyDefaultPeriod(p, firstOfMonth, lastOfMonth){
+  const startEl = document.getElementById('rp-period-start');
+  const endEl = document.getElementById('rp-period-end');
+  const step = p && p.frequency==='weekly' ? 7 : (p && p.frequency==='fortnightly' ? 14 : 0);
+  if(!step || !/^\d{4}-\d{2}-\d{2}$/.test(p.anchorDate||'')){ startEl.value = firstOfMonth; endEl.value = lastOfMonth; return; }
+  const day = 86400000;
+  const today = isoToMs(todayISO());
+  const anchor = isoToMs(p.anchorDate);
+  let k = Math.floor((today - anchor) / day / step);
+  if(k < 0) k = 0;
+  const covered = d => state.payments.some(x=>x.propertyId===p.id && x.periodStart && x.periodEnd && x.periodStart<=d && d<=x.periodEnd);
+  let due = msToIso(anchor + k*step*day);
+  for(let i=0; i<8 && covered(due); i++){ k++; due = msToIso(anchor + k*step*day); }
+  startEl.value = due;
+  endEl.value = msToIso(isoToMs(due) + (step-1)*day);
 }
 
 function nextInvoiceNumber(){
@@ -753,7 +819,7 @@ function buildSnapshot(){
   const s = state.settings;
   return {
     settings: { landlordName: s.landlordName||'', landlordEmail: s.landlordEmail||'', bankDetails: s.bankDetails||'' },
-    properties: state.properties.map(p=>({ id:p.id, name:p.name, tenant:p.tenant, email:p.email, rent:p.rent||'', dueDay:p.dueDay||0, ownerName:p.ownerName||'', ownerEmail:p.ownerEmail||'', paymentDetails:p.paymentDetails||'', phone:p.phone||'' })),
+    properties: state.properties.map(p=>({ id:p.id, name:p.name, tenant:p.tenant, email:p.email, rent:p.rent||'', dueDay:p.dueDay||0, frequency:p.frequency||'monthly', anchorDate:p.anchorDate||'', ownerName:p.ownerName||'', ownerEmail:p.ownerEmail||'', paymentDetails:p.paymentDetails||'', phone:p.phone||'' })),
     payments: state.payments.map(p=>({ propertyId:p.propertyId, periodStart:p.periodStart||'', periodEnd:p.periodEnd||'', date:p.date||'', amount:p.amount||'' }))
   };
 }
