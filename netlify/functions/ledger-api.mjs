@@ -4,17 +4,21 @@ import nodemailer from 'nodemailer';
 // ---------------------------------------------------------------------------
 // Ledger API: one endpoint the app talks to.
 //   action "sync"      -> app pushes its properties/payments so reminders can check them
-//   action "reminders" -> preview (dry_run) or send today's reminders right now
+//   action "reminders"     -> preview (dry_run) or send today's reminder emails right now
+//   action "texts-preview" -> show the text messages due today (changes nothing)
+//   action "texts"         -> return today's text messages for the iPhone Shortcut to send,
+//                             and mark them as handed over so they are never sent twice
 // The daily schedule (ledger-cron.mjs) calls runReminders() directly.
 // ---------------------------------------------------------------------------
 
 const TZ = 'Australia/Melbourne';
 
-// Days relative to the due date. -3 = three days before, 0 = due date, 3 = three days after.
+// Days relative to the due date. -3 = three days before, 0 = due date, 1 and 3 = days after.
 const STAGES = [
   { stage: 'before', days: -3 },
   { stage: 'due', days: 0 },
-  { stage: 'overdue', days: 3 },
+  { stage: 'late1', days: 1 },
+  { stage: 'late3', days: 3 },
 ];
 
 const CORS = {
@@ -63,6 +67,34 @@ function candidateDueDates(today, dueDay) {
   return [dueDateFor(y, m - 1, dueDay), dueDateFor(y, m, dueDay), dueDateFor(y, m + 1, dueDay)];
 }
 
+// Billing frequency per property: 'monthly' (fixed day of the month, the default),
+// 'fortnightly' or 'weekly' (every 14 / 7 days counted from one real due date, the anchor).
+export const FREQUENCIES = { monthly: 0, fortnightly: 14, weekly: 7 };
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const freqOf = (property) => (Object.hasOwn(FREQUENCIES, property.frequency) ? property.frequency : 'monthly');
+
+// Does this property have a usable schedule?
+export function hasSchedule(property) {
+  if (freqOf(property) === 'monthly') {
+    const d = Number(property.dueDay);
+    return d >= 1 && d <= 31;
+  }
+  return DATE_RE.test(property.anchorDate || '');
+}
+
+// Due dates close enough to "today" to matter (earliest first).
+export function dueDatesFor(property, today) {
+  if (!hasSchedule(property)) return [];
+  const freq = freqOf(property);
+  if (freq === 'monthly') return candidateDueDates(today, Number(property.dueDay));
+  const step = FREQUENCIES[freq];
+  const anchor = property.anchorDate;
+  const k = Math.floor((toMs(today) - toMs(anchor)) / 86400000 / step);
+  return [-1, 0, 1, 2]
+    .map((i) => addDays(anchor, (k + i) * step))
+    .filter((d) => d >= anchor); // never invent cycles from before the first due date
+}
+
 const fmtDate = (d) =>
   new Date(toMs(d)).toLocaleDateString('en-AU', {
     timeZone: 'UTC',
@@ -73,15 +105,17 @@ const fmtDate = (d) =>
 
 const money = (n) =>
   Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const aud = (n) => `AUD ${money(n)}`;
 
 // ----- paid detection --------------------------------------------------------
 // A due date counts as paid when a recorded payment's "period covered" includes it.
 // Older records with no period fall back to "received within 10 days of the due date".
-export function isPaid(payments, propertyId, dueDate) {
+export function isPaid(payments, propertyId, dueDate, frequency = 'monthly') {
   return payments.some((p) => {
     if (p.propertyId !== propertyId) return false;
     if (p.periodStart && p.periodEnd) return p.periodStart <= dueDate && dueDate <= p.periodEnd;
-    if (p.date) return p.date >= addDays(dueDate, -10) && p.date <= addDays(dueDate, 10);
+    // The date-received fallback is only safe for monthly rent (weekly/fortnightly cycles are too short).
+    if (frequency === 'monthly' && p.date) return p.date >= addDays(dueDate, -10) && p.date <= addDays(dueDate, 10);
     return false;
   });
 }
@@ -93,15 +127,15 @@ export function planReminders(snapshot, today) {
   const upcoming = [];
 
   for (const property of snapshot.properties || []) {
-    const dueDay = Number(property.dueDay);
-    if (!dueDay || dueDay < 1 || dueDay > 31 || !property.email) continue;
+    if (!hasSchedule(property) || !property.email) continue;
+    const freq = freqOf(property);
 
-    const dues = candidateDueDates(today, dueDay);
+    const dues = dueDatesFor(property, today);
 
     for (const dueDate of dues) {
       for (const { stage, days } of STAGES) {
         if (addDays(dueDate, days) === today) {
-          items.push({ property, dueDate, stage, paid: isPaid(payments, property.id, dueDate) });
+          items.push({ property, dueDate, stage, paid: isPaid(payments, property.id, dueDate, freq) });
         }
       }
     }
@@ -114,7 +148,8 @@ export function planReminders(snapshot, today) {
         property: property.name,
         tenant: property.tenant,
         dueDate: current,
-        paid: isPaid(payments, property.id, current),
+        frequency: freq,
+        paid: isPaid(payments, property.id, current, freq),
         reminderDates: STAGES.map((s) => addDays(current, s.days)),
       });
     }
@@ -128,8 +163,10 @@ function buildEmail(snapshot, item) {
   const settings = snapshot.settings || {};
   const fromName = property.ownerName || settings.landlordName || 'Your landlord';
   const replyTo = property.ownerEmail || settings.landlordEmail || undefined;
-  const amountText = property.rent ? ` of ${money(property.rent)}` : '';
-  const bank = settings.bankDetails ? `\n\nPayment details:\n${settings.bankDetails}` : '';
+  const amountText = property.rent ? ` of ${aud(property.rent)}` : '';
+  // Each property can have its own payment details; otherwise fall back to the default in Settings.
+  const details = (property.paymentDetails || settings.bankDetails || '').trim();
+  const bank = details ? `\n\nPayment details:\n${details}` : '';
   const ignore = `If you have already paid, please ignore this message and thank you.`;
 
   let subject;
@@ -140,13 +177,113 @@ function buildEmail(snapshot, item) {
   } else if (stage === 'due') {
     subject = `Rent due today: ${property.name}`;
     intro = `Your rent${amountText} for ${property.name} is due today (${fmtDate(dueDate)}).`;
+  } else if (stage === 'late1') {
+    subject = `Rent not yet received: ${property.name}, was due ${fmtDate(dueDate)}`;
+    intro = `Our records show that your rent${amountText} for ${property.name}, which was due yesterday (${fmtDate(dueDate)}), has not yet been received. If it is on its way, thank you. Otherwise, please arrange payment today.`;
   } else {
-    subject = `Rent overdue: ${property.name}, was due ${fmtDate(dueDate)}`;
-    intro = `Our records show that rent${amountText} for ${property.name}, due on ${fmtDate(dueDate)}, has not yet been received. Please arrange payment as soon as possible, or get in touch if there is a problem.`;
+    subject = `Second reminder, rent overdue: ${property.name}, was due ${fmtDate(dueDate)}`;
+    intro = `This is a second reminder that rent${amountText} for ${property.name}, due on ${fmtDate(dueDate)}, is still outstanding and is now 3 days overdue. Please arrange payment as soon as possible, or get in touch if there is a problem.`;
   }
 
   const text = `Dear ${property.tenant},\n\n${intro}${bank}\n\n${ignore}\n\nKind regards,\n${fromName}`;
   return { fromName, replyTo, subject, text };
+}
+
+// ----- text messages (the iPhone Shortcut sends these from your own number) ----
+const cleanPhone = (v) => String(v || '').replace(/[^\d+]/g, '');
+
+const fmtShort = (d) =>
+  new Date(toMs(d)).toLocaleDateString('en-AU', { timeZone: 'UTC', day: 'numeric', month: 'short' });
+
+function buildText(snapshot, item) {
+  const { property, dueDate, stage } = item;
+  const settings = snapshot.settings || {};
+  const fromName = property.ownerName || settings.landlordName || '';
+  const first = String(property.tenant || '').trim().split(/\s+/)[0] || 'there';
+  const amountText = property.rent ? ` of ${aud(property.rent)}` : '';
+  const d = fmtShort(dueDate);
+  const greet = `Hi ${first},\n\n`;
+  const sign = fromName ? `\n\n${fromName}` : '';
+
+  if (stage === 'before') {
+    return `${greet}A reminder that rent${amountText} for ${property.name} is due on ${d}. Payment details are in your email. If you have already paid, please ignore this.${sign}`;
+  }
+  if (stage === 'due') {
+    return `${greet}Rent${amountText} for ${property.name} is due today. Payment details are in your email. If you have already paid, please ignore this.${sign}`;
+  }
+  if (stage === 'late1') {
+    return `${greet}Rent${amountText} for ${property.name} was due yesterday (${d}) and has not been received yet. Please pay today if you can, or let me know if there is a problem.${sign}`;
+  }
+  return `${greet}Rent${amountText} for ${property.name} is now 3 days overdue (due ${d}). Please arrange payment as soon as possible, or get in touch.${sign}`;
+}
+
+// Example wording for the first property that has a due day, so you can read all four texts.
+function sampleTexts(snapshot, today) {
+  const { upcoming } = planReminders(snapshot, today);
+  const prop = (snapshot.properties || []).find((p) => hasSchedule(p) && p.email);
+  const u = prop && upcoming.find((x) => x.property === prop.name);
+  if (!prop || !u) return [];
+  return STAGES.map((s) => ({
+    stage: s.stage,
+    property: prop.name,
+    body: buildText(snapshot, { property: prop, dueDate: u.dueDate, stage: s.stage }),
+  }));
+}
+
+export async function planTexts({ markSent = false, todayOverride } = {}) {
+  const store = getStore('ledger');
+  const snapshot = await store.get('snapshot', { type: 'json', consistency: 'strong' });
+  if (!snapshot) {
+    return { ok: false, error: 'No data has been synced yet. In the app, tap "Sync data now" first.' };
+  }
+
+  const today = todayOverride || melbourneToday();
+  const textLog = (await store.get('text-log', { type: 'json', consistency: 'strong' })) || {};
+  const { items } = planReminders(snapshot, today);
+
+  const messages = [];
+  const skipped = [];
+  let changed = false;
+
+  for (const item of items) {
+    const key = `${item.property.id}|${item.dueDate}|${item.stage}`;
+    const base = {
+      property: item.property.name,
+      tenant: item.property.tenant,
+      stage: item.stage,
+      dueDate: item.dueDate,
+    };
+    if (textLog[key]) {
+      skipped.push({ ...base, reason: 'already-texted' });
+      continue;
+    }
+    if (item.paid) {
+      skipped.push({ ...base, reason: 'paid' });
+      continue;
+    }
+    const to = cleanPhone(item.property.phone);
+    if (!to) {
+      skipped.push({ ...base, reason: 'no-mobile' });
+      continue;
+    }
+    messages.push({ ...base, to, body: buildText(snapshot, item) });
+    if (markSent) {
+      textLog[key] = new Date().toISOString();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    const cutoff = addDays(today, -150);
+    for (const k of Object.keys(textLog)) {
+      if (textLog[k].slice(0, 10) < cutoff) delete textLog[k];
+    }
+    await store.setJSON('text-log', textLog);
+  }
+
+  const out = { ok: true, today, markedAsHandedOver: markSent, messages, skipped };
+  if (!markSent) out.samples = sampleTexts(snapshot, today);
+  return out;
 }
 
 // ----- main runner (used by the HTTP action and by the daily schedule) -------
@@ -275,8 +412,12 @@ export default async (req) => {
           email: str(p.email),
           rent: str(p.rent, 20),
           dueDay: Number(p.dueDay) || 0,
+          frequency: Object.hasOwn(FREQUENCIES, p.frequency) ? p.frequency : 'monthly',
+          anchorDate: DATE_RE.test(p.anchorDate || '') ? p.anchorDate : '',
           ownerName: str(p.ownerName),
           ownerEmail: str(p.ownerEmail),
+          paymentDetails: str(p.paymentDetails, 600),
+          phone: str(p.phone, 30),
         })),
         payments: pays.slice(0, 2000).map((p) => ({
           propertyId: str(p.propertyId, 60),
@@ -300,6 +441,20 @@ export default async (req) => {
         dryRun: body.dry_run !== false, // default to a safe preview
         todayOverride: /^\d{4}-\d{2}-\d{2}$/.test(body.today || '') ? body.today : undefined,
       });
+      return json(result, result.ok ? 200 : 400);
+    }
+
+    if (body.action === 'texts-preview') {
+      const result = await planTexts({
+        markSent: false,
+        todayOverride: /^\d{4}-\d{2}-\d{2}$/.test(body.today || '') ? body.today : undefined,
+      });
+      return json(result, result.ok ? 200 : 400);
+    }
+
+    if (body.action === 'texts') {
+      // Always uses the real date and always marks messages as handed over.
+      const result = await planTexts({ markSent: true });
       return json(result, result.ok ? 200 : 400);
     }
 
