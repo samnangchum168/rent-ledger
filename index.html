@@ -339,6 +339,7 @@ async function saveSettings(){ localStorage.setItem('settings', JSON.stringify(s
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function money(n){ return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function aud(n){ return 'AUD ' + money(n); }
 function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 
 // ---------- NAV ----------
@@ -627,7 +628,7 @@ function buildInvoicePDF({property, amount, date, periodStart, periodEnd, method
   doc.setFont('courier','normal'); doc.setFontSize(10);
   doc.text('via ' + method, left+16, y+44);
   doc.setFont('times','bold'); doc.setFontSize(20);
-  doc.text(money(amount), 524, y+40, {align:'right'});
+  doc.text(aud(amount), 524, y+40, {align:'right'});
   y += 70 + 34;
 
   doc.setFont('times','italic'); doc.setFontSize(10.5);
@@ -688,7 +689,7 @@ document.getElementById('rp-generate').addEventListener('click', async ()=>{
       to_email: property.email,
       to_name: property.tenant,
       subject: `Rent invoice ${invoiceNumber} — ${property.name}`,
-      message: `Dear ${property.tenant},\n\nThis email confirms receipt of your rent payment for ${property.name}.\n\nAmount received: ${money(amount)}\nPeriod covered: ${periodLabel(periodStart, periodEnd)}\nDate received: ${fmtDate(date)}\nPayment method: ${method}\n\nYour invoice (${invoiceNumber}) is attached to this email for your records.\n\nThank you for your prompt payment.\n\nKind regards,\n${billFromName}`,
+      message: `Dear ${property.tenant},\n\nThis email confirms receipt of your rent payment for ${property.name}.\n\nAmount received: ${aud(amount)}\nPeriod covered: ${periodLabel(periodStart, periodEnd)}\nDate received: ${fmtDate(date)}\nPayment method: ${method}\n\nYour invoice (${invoiceNumber}) is attached to this email for your records.\n\nThank you for your prompt payment.\n\nKind regards,\n${billFromName}`,
       invoice_number: invoiceNumber,
       pdf_base64: pdfBase64
     });
@@ -724,7 +725,7 @@ function renderHistory(){
         <span>${p.invoiceNumber}</span>
         <span>${new Date(p.date+'T12:00:00').toLocaleDateString()}</span>
       </div>
-      <div class="hist-amt">${money(p.amount)}
+      <div class="hist-amt">${aud(p.amount)}
         ${p.emailStatus==='sent' ? '<span class="status-pill status-sent">emailed</span>' : ''}
         ${p.emailStatus==='failed' ? '<span class="status-pill status-failed">failed</span>' : ''}
       </div>
