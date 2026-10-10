@@ -116,6 +116,8 @@
     padding:11px 0;border-bottom:1px solid var(--line);
   }
   .prop-item:last-child{border-bottom:none;}
+  .prop-item > div:first-child{flex:1;min-width:0;padding-right:10px;}
+  .prop-pay{width:100%;min-height:54px;margin-top:4px;font-size:12px;}
   .prop-item .name{font-weight:600;font-size:15px;}
   .prop-item .sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-top:2px;}
   .empty{
@@ -241,6 +243,8 @@
         <input id="pr-rent" type="number" inputmode="decimal" placeholder="0.00">
         <label for="pr-dueday">Rent due day (for automatic reminders)</label>
         <select id="pr-dueday"><option value="">Not set (no reminders)</option><option value="1">Day 1 of each month</option><option value="2">Day 2 of each month</option><option value="3">Day 3 of each month</option><option value="4">Day 4 of each month</option><option value="5">Day 5 of each month</option><option value="6">Day 6 of each month</option><option value="7">Day 7 of each month</option><option value="8">Day 8 of each month</option><option value="9">Day 9 of each month</option><option value="10">Day 10 of each month</option><option value="11">Day 11 of each month</option><option value="12">Day 12 of each month</option><option value="13">Day 13 of each month</option><option value="14">Day 14 of each month</option><option value="15">Day 15 of each month</option><option value="16">Day 16 of each month</option><option value="17">Day 17 of each month</option><option value="18">Day 18 of each month</option><option value="19">Day 19 of each month</option><option value="20">Day 20 of each month</option><option value="21">Day 21 of each month</option><option value="22">Day 22 of each month</option><option value="23">Day 23 of each month</option><option value="24">Day 24 of each month</option><option value="25">Day 25 of each month</option><option value="26">Day 26 of each month</option><option value="27">Day 27 of each month</option><option value="28">Day 28 of each month</option><option value="29">Day 29 of each month</option><option value="30">Day 30 of each month</option><option value="31">Day 31 of each month</option></select>
+        <label for="pr-pay">Payment details for this property (optional; blank uses the default in Settings)</label>
+        <textarea id="pr-pay" placeholder="e.g. BSB 000-000, Account 12345678, Name: Sam Carter"></textarea>
         <label for="pr-owner-name">Billed from name (optional — leave blank to use your details in Settings)</label>
         <input id="pr-owner-name" placeholder="e.g. your partner's name, for a jointly-owned property">
         <label for="pr-owner-email">Billed from email (optional)</label>
@@ -259,7 +263,7 @@
         <textarea id="st-address" placeholder="Correspondence address"></textarea>
         <label for="st-email">Your email (reply-to)</label>
         <input id="st-email" type="email" placeholder="you@example.com">
-        <label for="st-bank">Bank / payment details (optional, printed on invoice)</label>
+        <label for="st-bank">Default payment details (used for any property that has none of its own)</label>
         <textarea id="st-bank" placeholder="Sort code, account number, or payment note"></textarea>
       </div>
 
@@ -281,7 +285,7 @@
         <h2>Rent reminders</h2>
         <div class="helptext">
           Every morning (about 9am Melbourne time) your Netlify site emails each tenant a reminder 3 days before the
-          due date, on the due date, and 3 days after, but only while no payment covering that due date is recorded here.
+          due date, on the due date, 1 day after and 3 days after, but only while no payment covering that due date is recorded here.
           Set each property's due day on the Properties tab. For this to work, the "Period covered" on a payment must
           include the due date it pays for. Your records are copied to your Netlify site automatically so it can check.
         </div>
@@ -355,6 +359,8 @@ function renderProperties(){
         <div class="sub">${escapeHtml(p.tenant)} · ${escapeHtml(p.email)}</div>
         ${p.ownerName ? `<div class="sub">Billed from: ${escapeHtml(p.ownerName)}</div>` : ''}
         <div class="sub">Rent due: <select class="dueday-select" data-dueday="${p.id}" aria-label="Rent due day">${dueDayOptions(p.dueDay)}</select></div>
+        <div class="sub" style="margin-top:8px;">Payment details for this property</div>
+        <textarea class="prop-pay" data-pay="${p.id}" aria-label="Payment details for ${escapeHtml(p.name)}" placeholder="Blank = use the default in Settings">${escapeHtml(p.paymentDetails||'')}</textarea>
       </div>
       <button class="btn-danger" data-del="${p.id}">Remove</button>
     </div>`).join('');
@@ -363,6 +369,14 @@ function renderProperties(){
       const p = state.properties.find(x=>x.id===sel.dataset.dueday);
       if(!p) return;
       p.dueDay = sel.value ? Number(sel.value) : '';
+      await saveProperties();
+    });
+  });
+  list.querySelectorAll('[data-pay]').forEach(t=>{
+    t.addEventListener('change', async ()=>{
+      const p = state.properties.find(x=>x.id===t.dataset.pay);
+      if(!p) return;
+      p.paymentDetails = t.value.trim();
       await saveProperties();
     });
   });
@@ -386,10 +400,11 @@ document.getElementById('pr-add').addEventListener('click', async ()=>{
   const ownerName = document.getElementById('pr-owner-name').value.trim();
   const ownerEmail = document.getElementById('pr-owner-email').value.trim();
   const dueDay = document.getElementById('pr-dueday').value;
+  const paymentDetails = document.getElementById('pr-pay').value.trim();
   if(!name || !address || !tenant || !email){ alert('Please fill in name, address, tenant name, and tenant email.'); return; }
-  state.properties.push({ id: uid(), name, address, tenant, email, rent: rent || '', ownerName, ownerEmail, dueDay: dueDay ? Number(dueDay) : '' });
+  state.properties.push({ id: uid(), name, address, tenant, email, rent: rent || '', ownerName, ownerEmail, paymentDetails, dueDay: dueDay ? Number(dueDay) : '' });
   await saveProperties();
-  ['pr-name','pr-address','pr-tenant','pr-email','pr-rent','pr-owner-name','pr-owner-email','pr-dueday'].forEach(id=>document.getElementById(id).value='');
+  ['pr-name','pr-address','pr-tenant','pr-email','pr-rent','pr-owner-name','pr-owner-email','pr-dueday','pr-pay'].forEach(id=>document.getElementById(id).value='');
   renderProperties();
   renderRecordForm();
 });
@@ -537,11 +552,12 @@ function buildInvoicePDF({property, amount, date, periodStart, periodEnd, method
   doc.text('This confirms rent payment has been received in full for the period stated above.', left, y, {maxWidth:484});
   y += 30;
 
-  if(s.bankDetails){
+  const payText = (property.paymentDetails || s.bankDetails || '').trim();
+  if(payText){
     doc.setFont('times','bold'); doc.setFontSize(10);
     doc.text('Payment details for reference', left, y); y+=14;
     doc.setFont('courier','normal'); doc.setFontSize(9.5);
-    s.bankDetails.split('\n').forEach(line=>{ doc.text(line, left, y); y+=13; });
+    payText.split('\n').forEach(line=>{ doc.text(line, left, y); y+=13; });
   }
 
   doc.setFont('times','normal'); doc.setFontSize(8.5); doc.setTextColor(140);
@@ -721,7 +737,7 @@ function buildSnapshot(){
   const s = state.settings;
   return {
     settings: { landlordName: s.landlordName||'', landlordEmail: s.landlordEmail||'', bankDetails: s.bankDetails||'' },
-    properties: state.properties.map(p=>({ id:p.id, name:p.name, tenant:p.tenant, email:p.email, rent:p.rent||'', dueDay:p.dueDay||0, ownerName:p.ownerName||'', ownerEmail:p.ownerEmail||'' })),
+    properties: state.properties.map(p=>({ id:p.id, name:p.name, tenant:p.tenant, email:p.email, rent:p.rent||'', dueDay:p.dueDay||0, ownerName:p.ownerName||'', ownerEmail:p.ownerEmail||'', paymentDetails:p.paymentDetails||'' })),
     payments: state.payments.map(p=>({ propertyId:p.propertyId, periodStart:p.periodStart||'', periodEnd:p.periodEnd||'', date:p.date||'', amount:p.amount||'' }))
   };
 }
@@ -756,7 +772,7 @@ function scheduleSync(){
   syncTimer = setTimeout(()=>{ syncNow({auto:true}); }, 800);
 }
 
-const STAGE_LABEL = { before:'3-day reminder', due:'Due-date reminder', overdue:'Overdue reminder' };
+const STAGE_LABEL = { before:'3-day reminder', due:'Due-date reminder', late1:'1-day overdue reminder', late3:'3-day overdue reminder' };
 const ACTION_LABEL = { 'sent':'Sent', 'would-send':'Would send', 'skipped-paid':'Skipped, payment recorded', 'already-sent':'Already sent', 'error':'Failed' };
 
 function renderReminderResult(d){
@@ -769,7 +785,7 @@ function renderReminderResult(d){
       return `<div class="hist-item">
         <div style="font-weight:600;">${escapeHtml(u.property)}</div>
         <div class="helptext">Next due ${fmtDate(u.dueDate)}: ${u.paid ? 'payment recorded, no reminders needed' : 'not yet paid'}.<br>
-        Reminders: ${fmtDate(r[0])} (3 days before), ${fmtDate(r[1])} (due date), ${fmtDate(r[2])} (3 days after).</div>
+        Reminders: ${fmtDate(r[0])} (3 days before), ${fmtDate(r[1])} (due date), ${fmtDate(r[2])} (1 day after), ${fmtDate(r[3])} (3 days after).</div>
       </div>`;
     }).join('');
   }
