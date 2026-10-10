@@ -67,6 +67,34 @@ function candidateDueDates(today, dueDay) {
   return [dueDateFor(y, m - 1, dueDay), dueDateFor(y, m, dueDay), dueDateFor(y, m + 1, dueDay)];
 }
 
+// Billing frequency per property: 'monthly' (fixed day of the month, the default),
+// 'fortnightly' or 'weekly' (every 14 / 7 days counted from one real due date, the anchor).
+export const FREQUENCIES = { monthly: 0, fortnightly: 14, weekly: 7 };
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const freqOf = (property) => (Object.hasOwn(FREQUENCIES, property.frequency) ? property.frequency : 'monthly');
+
+// Does this property have a usable schedule?
+export function hasSchedule(property) {
+  if (freqOf(property) === 'monthly') {
+    const d = Number(property.dueDay);
+    return d >= 1 && d <= 31;
+  }
+  return DATE_RE.test(property.anchorDate || '');
+}
+
+// Due dates close enough to "today" to matter (earliest first).
+export function dueDatesFor(property, today) {
+  if (!hasSchedule(property)) return [];
+  const freq = freqOf(property);
+  if (freq === 'monthly') return candidateDueDates(today, Number(property.dueDay));
+  const step = FREQUENCIES[freq];
+  const anchor = property.anchorDate;
+  const k = Math.floor((toMs(today) - toMs(anchor)) / 86400000 / step);
+  return [-1, 0, 1, 2]
+    .map((i) => addDays(anchor, (k + i) * step))
+    .filter((d) => d >= anchor); // never invent cycles from before the first due date
+}
+
 const fmtDate = (d) =>
   new Date(toMs(d)).toLocaleDateString('en-AU', {
     timeZone: 'UTC',
@@ -81,11 +109,12 @@ const money = (n) =>
 // ----- paid detection --------------------------------------------------------
 // A due date counts as paid when a recorded payment's "period covered" includes it.
 // Older records with no period fall back to "received within 10 days of the due date".
-export function isPaid(payments, propertyId, dueDate) {
+export function isPaid(payments, propertyId, dueDate, frequency = 'monthly') {
   return payments.some((p) => {
     if (p.propertyId !== propertyId) return false;
     if (p.periodStart && p.periodEnd) return p.periodStart <= dueDate && dueDate <= p.periodEnd;
-    if (p.date) return p.date >= addDays(dueDate, -10) && p.date <= addDays(dueDate, 10);
+    // The date-received fallback is only safe for monthly rent (weekly/fortnightly cycles are too short).
+    if (frequency === 'monthly' && p.date) return p.date >= addDays(dueDate, -10) && p.date <= addDays(dueDate, 10);
     return false;
   });
 }
@@ -97,15 +126,15 @@ export function planReminders(snapshot, today) {
   const upcoming = [];
 
   for (const property of snapshot.properties || []) {
-    const dueDay = Number(property.dueDay);
-    if (!dueDay || dueDay < 1 || dueDay > 31 || !property.email) continue;
+    if (!hasSchedule(property) || !property.email) continue;
+    const freq = freqOf(property);
 
-    const dues = candidateDueDates(today, dueDay);
+    const dues = dueDatesFor(property, today);
 
     for (const dueDate of dues) {
       for (const { stage, days } of STAGES) {
         if (addDays(dueDate, days) === today) {
-          items.push({ property, dueDate, stage, paid: isPaid(payments, property.id, dueDate) });
+          items.push({ property, dueDate, stage, paid: isPaid(payments, property.id, dueDate, freq) });
         }
       }
     }
@@ -118,7 +147,8 @@ export function planReminders(snapshot, today) {
         property: property.name,
         tenant: property.tenant,
         dueDate: current,
-        paid: isPaid(payments, property.id, current),
+        frequency: freq,
+        paid: isPaid(payments, property.id, current, freq),
         reminderDates: STAGES.map((s) => addDays(current, s.days)),
       });
     }
@@ -188,7 +218,7 @@ function buildText(snapshot, item) {
 // Example wording for the first property that has a due day, so you can read all four texts.
 function sampleTexts(snapshot, today) {
   const { upcoming } = planReminders(snapshot, today);
-  const prop = (snapshot.properties || []).find((p) => Number(p.dueDay) && p.email);
+  const prop = (snapshot.properties || []).find((p) => hasSchedule(p) && p.email);
   const u = prop && upcoming.find((x) => x.property === prop.name);
   if (!prop || !u) return [];
   return STAGES.map((s) => ({
@@ -380,6 +410,8 @@ export default async (req) => {
           email: str(p.email),
           rent: str(p.rent, 20),
           dueDay: Number(p.dueDay) || 0,
+          frequency: Object.hasOwn(FREQUENCIES, p.frequency) ? p.frequency : 'monthly',
+          anchorDate: DATE_RE.test(p.anchorDate || '') ? p.anchorDate : '',
           ownerName: str(p.ownerName),
           ownerEmail: str(p.ownerEmail),
           paymentDetails: str(p.paymentDetails, 600),
