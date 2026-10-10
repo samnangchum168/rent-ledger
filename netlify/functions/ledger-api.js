@@ -4,7 +4,10 @@ import nodemailer from 'nodemailer';
 // ---------------------------------------------------------------------------
 // Ledger API: one endpoint the app talks to.
 //   action "sync"      -> app pushes its properties/payments so reminders can check them
-//   action "reminders" -> preview (dry_run) or send today's reminders right now
+//   action "reminders"     -> preview (dry_run) or send today's reminder emails right now
+//   action "texts-preview" -> show the text messages due today (changes nothing)
+//   action "texts"         -> return today's text messages for the iPhone Shortcut to send,
+//                             and mark them as handed over so they are never sent twice
 // The daily schedule (ledger-cron.mjs) calls runReminders() directly.
 // ---------------------------------------------------------------------------
 
@@ -155,6 +158,102 @@ function buildEmail(snapshot, item) {
   return { fromName, replyTo, subject, text };
 }
 
+// ----- text messages (the iPhone Shortcut sends these from your own number) ----
+const cleanPhone = (v) => String(v || '').replace(/[^\d+]/g, '');
+
+const fmtShort = (d) =>
+  new Date(toMs(d)).toLocaleDateString('en-AU', { timeZone: 'UTC', day: 'numeric', month: 'short' });
+
+function buildText(snapshot, item) {
+  const { property, dueDate, stage } = item;
+  const settings = snapshot.settings || {};
+  const fromName = property.ownerName || settings.landlordName || '';
+  const first = String(property.tenant || '').trim().split(/\s+/)[0] || 'there';
+  const amountText = property.rent ? ` of ${money(property.rent)}` : '';
+  const sign = fromName ? ` ${fromName}` : '';
+  const d = fmtShort(dueDate);
+
+  if (stage === 'before') {
+    return `Hi ${first}, a reminder that rent${amountText} for ${property.name} is due on ${d}. Payment details are in your email. If you have already paid, please ignore this.${sign}`;
+  }
+  if (stage === 'due') {
+    return `Hi ${first}, rent${amountText} for ${property.name} is due today. Payment details are in your email. If you have already paid, please ignore this.${sign}`;
+  }
+  if (stage === 'late1') {
+    return `Hi ${first}, rent${amountText} for ${property.name} was due yesterday (${d}) and has not been received yet. Please pay today if you can, or let me know if there is a problem.${sign}`;
+  }
+  return `Hi ${first}, rent${amountText} for ${property.name} is now 3 days overdue (due ${d}). Please arrange payment as soon as possible, or get in touch.${sign}`;
+}
+
+// Example wording for the first property that has a due day, so you can read all four texts.
+function sampleTexts(snapshot, today) {
+  const { upcoming } = planReminders(snapshot, today);
+  const prop = (snapshot.properties || []).find((p) => Number(p.dueDay) && p.email);
+  const u = prop && upcoming.find((x) => x.property === prop.name);
+  if (!prop || !u) return [];
+  return STAGES.map((s) => ({
+    stage: s.stage,
+    property: prop.name,
+    body: buildText(snapshot, { property: prop, dueDate: u.dueDate, stage: s.stage }),
+  }));
+}
+
+export async function planTexts({ markSent = false, todayOverride } = {}) {
+  const store = getStore('ledger');
+  const snapshot = await store.get('snapshot', { type: 'json', consistency: 'strong' });
+  if (!snapshot) {
+    return { ok: false, error: 'No data has been synced yet. In the app, tap "Sync data now" first.' };
+  }
+
+  const today = todayOverride || melbourneToday();
+  const textLog = (await store.get('text-log', { type: 'json', consistency: 'strong' })) || {};
+  const { items } = planReminders(snapshot, today);
+
+  const messages = [];
+  const skipped = [];
+  let changed = false;
+
+  for (const item of items) {
+    const key = `${item.property.id}|${item.dueDate}|${item.stage}`;
+    const base = {
+      property: item.property.name,
+      tenant: item.property.tenant,
+      stage: item.stage,
+      dueDate: item.dueDate,
+    };
+    if (textLog[key]) {
+      skipped.push({ ...base, reason: 'already-texted' });
+      continue;
+    }
+    if (item.paid) {
+      skipped.push({ ...base, reason: 'paid' });
+      continue;
+    }
+    const to = cleanPhone(item.property.phone);
+    if (!to) {
+      skipped.push({ ...base, reason: 'no-mobile' });
+      continue;
+    }
+    messages.push({ ...base, to, body: buildText(snapshot, item) });
+    if (markSent) {
+      textLog[key] = new Date().toISOString();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    const cutoff = addDays(today, -150);
+    for (const k of Object.keys(textLog)) {
+      if (textLog[k].slice(0, 10) < cutoff) delete textLog[k];
+    }
+    await store.setJSON('text-log', textLog);
+  }
+
+  const out = { ok: true, today, markedAsHandedOver: markSent, messages, skipped };
+  if (!markSent) out.samples = sampleTexts(snapshot, today);
+  return out;
+}
+
 // ----- main runner (used by the HTTP action and by the daily schedule) -------
 export async function runReminders({ dryRun = false, todayOverride } = {}) {
   const store = getStore('ledger');
@@ -284,6 +383,7 @@ export default async (req) => {
           ownerName: str(p.ownerName),
           ownerEmail: str(p.ownerEmail),
           paymentDetails: str(p.paymentDetails, 600),
+          phone: str(p.phone, 30),
         })),
         payments: pays.slice(0, 2000).map((p) => ({
           propertyId: str(p.propertyId, 60),
@@ -307,6 +407,20 @@ export default async (req) => {
         dryRun: body.dry_run !== false, // default to a safe preview
         todayOverride: /^\d{4}-\d{2}-\d{2}$/.test(body.today || '') ? body.today : undefined,
       });
+      return json(result, result.ok ? 200 : 400);
+    }
+
+    if (body.action === 'texts-preview') {
+      const result = await planTexts({
+        markSent: false,
+        todayOverride: /^\d{4}-\d{2}-\d{2}$/.test(body.today || '') ? body.today : undefined,
+      });
+      return json(result, result.ok ? 200 : 400);
+    }
+
+    if (body.action === 'texts') {
+      // Always uses the real date and always marks messages as handed over.
+      const result = await planTexts({ markSent: true });
       return json(result, result.ok ? 200 : 400);
     }
 
