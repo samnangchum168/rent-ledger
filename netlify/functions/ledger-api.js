@@ -105,6 +105,7 @@ const fmtDate = (d) =>
 
 const money = (n) =>
   Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const aud = (n) => `AUD ${money(n)}`;
 
 // ----- paid detection --------------------------------------------------------
 // A due date counts as paid when a recorded payment's "period covered" includes it.
@@ -162,7 +163,7 @@ function buildEmail(snapshot, item) {
   const settings = snapshot.settings || {};
   const fromName = property.ownerName || settings.landlordName || 'Your landlord';
   const replyTo = property.ownerEmail || settings.landlordEmail || undefined;
-  const amountText = property.rent ? ` of ${money(property.rent)}` : '';
+  const amountText = property.rent ? ` of ${aud(property.rent)}` : '';
   // Each property can have its own payment details; otherwise fall back to the default in Settings.
   const details = (property.paymentDetails || settings.bankDetails || '').trim();
   const bank = details ? `\n\nPayment details:\n${details}` : '';
@@ -199,20 +200,21 @@ function buildText(snapshot, item) {
   const settings = snapshot.settings || {};
   const fromName = property.ownerName || settings.landlordName || '';
   const first = String(property.tenant || '').trim().split(/\s+/)[0] || 'there';
-  const amountText = property.rent ? ` of ${money(property.rent)}` : '';
-  const sign = fromName ? ` ${fromName}` : '';
+  const amountText = property.rent ? ` of ${aud(property.rent)}` : '';
   const d = fmtShort(dueDate);
+  const greet = `Hi ${first},\n\n`;
+  const sign = fromName ? `\n\n${fromName}` : '';
 
   if (stage === 'before') {
-    return `Hi ${first}, a reminder that rent${amountText} for ${property.name} is due on ${d}. Payment details are in your email. If you have already paid, please ignore this.${sign}`;
+    return `${greet}A reminder that rent${amountText} for ${property.name} is due on ${d}. Payment details are in your email. If you have already paid, please ignore this.${sign}`;
   }
   if (stage === 'due') {
-    return `Hi ${first}, rent${amountText} for ${property.name} is due today. Payment details are in your email. If you have already paid, please ignore this.${sign}`;
+    return `${greet}Rent${amountText} for ${property.name} is due today. Payment details are in your email. If you have already paid, please ignore this.${sign}`;
   }
   if (stage === 'late1') {
-    return `Hi ${first}, rent${amountText} for ${property.name} was due yesterday (${d}) and has not been received yet. Please pay today if you can, or let me know if there is a problem.${sign}`;
+    return `${greet}Rent${amountText} for ${property.name} was due yesterday (${d}) and has not been received yet. Please pay today if you can, or let me know if there is a problem.${sign}`;
   }
-  return `Hi ${first}, rent${amountText} for ${property.name} is now 3 days overdue (due ${d}). Please arrange payment as soon as possible, or get in touch.${sign}`;
+  return `${greet}Rent${amountText} for ${property.name} is now 3 days overdue (due ${d}). Please arrange payment as soon as possible, or get in touch.${sign}`;
 }
 
 // Example wording for the first property that has a due day, so you can read all four texts.
