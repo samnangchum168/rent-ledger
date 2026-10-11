@@ -6,6 +6,7 @@ import nodemailer from 'nodemailer';
 //   action "sync"      -> app pushes its properties/payments so reminders can check them
 //   action "reminders"     -> preview (dry_run) or send today's reminder emails right now
 //   action "texts-preview" -> show the text messages due today (changes nothing)
+//   action "income-add" / "income-list" / "income-ack" -> hand rent payments from Ledger to the Rental Tracker
 //   action "texts"         -> return today's text messages for the iPhone Shortcut to send,
 //                             and mark them as handed over so they are never sent twice
 // The daily schedule (ledger-cron.mjs) calls runReminders() directly.
@@ -456,6 +457,49 @@ export default async (req) => {
       // Always uses the real date and always marks messages as handed over.
       const result = await planTexts({ markSent: true });
       return json(result, result.ok ? 200 : 400);
+    }
+
+    // ----- income feed: Ledger -> Rental Tracker ------------------------------
+    // Ledger queues each recorded payment; the Rental Tracker lists them, saves them as income,
+    // then acknowledges (removes) the ones it has taken.
+    if (body.action === 'income-add') {
+      const e = body.entry || {};
+      const amount = Number(e.amount);
+      const entry = {
+        id: str(e.id, 60),
+        propertyId: str(e.propertyId, 60),
+        property: str(e.property),
+        amount: Math.round(amount * 100) / 100,
+        date: str(e.date, 10),
+        periodStart: str(e.periodStart, 10),
+        periodEnd: str(e.periodEnd, 10),
+        method: str(e.method, 40),
+        invoiceNumber: str(e.invoiceNumber, 40),
+        addedAt: new Date().toISOString(),
+      };
+      if (!entry.id || !(amount > 0) || !DATE_RE.test(entry.date)) {
+        return json({ ok: false, error: 'Invalid payment (it needs an id, an amount and a date).' }, 400);
+      }
+      const store = getStore('ledger');
+      const feed = (await store.get('income-feed', { type: 'json', consistency: 'strong' })) || [];
+      if (!feed.some((x) => x.id === entry.id)) feed.push(entry);
+      await store.setJSON('income-feed', feed.slice(-500));
+      return json({ ok: true, queued: feed.length });
+    }
+
+    if (body.action === 'income-list') {
+      const store = getStore('ledger');
+      const feed = (await store.get('income-feed', { type: 'json', consistency: 'strong' })) || [];
+      return json({ ok: true, entries: feed });
+    }
+
+    if (body.action === 'income-ack') {
+      const ids = new Set((Array.isArray(body.ids) ? body.ids : []).map((x) => str(x, 60)));
+      const store = getStore('ledger');
+      const feed = (await store.get('income-feed', { type: 'json', consistency: 'strong' })) || [];
+      const rest = feed.filter((x) => !ids.has(x.id));
+      await store.setJSON('income-feed', rest);
+      return json({ ok: true, remaining: rest.length });
     }
 
     return json({ ok: false, error: 'Unknown action' }, 400);
