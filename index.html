@@ -699,9 +699,10 @@ document.getElementById('rp-generate').addEventListener('click', async ()=>{
 
   state.payments.unshift({
     id: uid(), propertyId: property.id, propertyName: property.name, tenant: property.tenant, tenantEmail: property.email,
-    amount, date, periodStart, periodEnd, method, invoiceNumber, emailStatus, pdfBase64
+    amount, date, periodStart, periodEnd, method, invoiceNumber, emailStatus, pdfBase64, rtSent:false
   });
   await savePayments();
+  const trackerResult = await pushIncome(state.payments[0]);
 
   btn.disabled = false; btn.textContent = 'Generate & send invoice';
   document.getElementById('rp-amount').value = property.rent || '';
@@ -713,7 +714,28 @@ document.getElementById('rp-generate').addEventListener('click', async ()=>{
   else if(emailStatus==='failed') banner.innerHTML = `<div class="banner err">Invoice ${invoiceNumber} generated, but the email failed to send (${escapeHtml(window.__lastEmailError||'unknown error')}).${shareBtnHtml}</div>`;
   else banner.innerHTML = `<div class="banner warn">Invoice ${invoiceNumber} generated. Add EmailJS details in Settings to enable auto-send.${shareBtnHtml}</div>`;
   document.getElementById('rp-share-now').addEventListener('click', ()=> sharePdfBase64(pdfBase64, invoiceNumber + '.pdf'));
+  if(trackerResult.ok) banner.insertAdjacentHTML('beforeend', '<div class="banner ok" style="margin-top:8px;">Rent also sent to your Rental Tracker. It appears there the next time you open it.</div>');
+  else if(trackerResult.error) banner.insertAdjacentHTML('beforeend', '<div class="banner warn" style="margin-top:8px;">Could not reach the Rental Tracker link yet. It will retry automatically next time you open Ledger.</div>');
 });
+
+// ---------- RENTAL TRACKER LINK ----------
+// Each recorded payment is queued on your server; the Rental Tracker picks it up as "Rent received".
+// Payments recorded before this feature existed have no rtSent flag and are never sent.
+async function pushIncome(p){
+  if(!p || p.rtSent !== false) return { ok:true, skipped:true };
+  const r = await callApi('income-add', { entry: {
+    id:p.id, propertyId:p.propertyId, property:p.propertyName, amount:Number(p.amount), date:p.date,
+    periodStart:p.periodStart||'', periodEnd:p.periodEnd||'', method:p.method||'', invoiceNumber:p.invoiceNumber||''
+  }});
+  if(r.ok){ p.rtSent = true; await savePayments(); }
+  return r;
+}
+async function pushPendingIncome(){
+  for(const p of state.payments){
+    if(p.rtSent === false){ const r = await pushIncome(p); if(!r.ok) break; }
+  }
+  renderHistory();
+}
 
 // ---------- HISTORY ----------
 function renderHistory(){
@@ -728,6 +750,8 @@ function renderHistory(){
       <div class="hist-amt">${aud(p.amount)}
         ${p.emailStatus==='sent' ? '<span class="status-pill status-sent">emailed</span>' : ''}
         ${p.emailStatus==='failed' ? '<span class="status-pill status-failed">failed</span>' : ''}
+        ${p.rtSent===true ? '<span class="status-pill status-sent">sent to tracker</span>' : ''}
+        ${p.rtSent===false ? '<span class="status-pill status-failed">tracker pending</span>' : ''}
       </div>
       <div class="sub" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);">${escapeHtml(p.propertyName)} · ${escapeHtml(p.tenant)}</div>
       <div class="hist-actions">
@@ -942,6 +966,7 @@ document.getElementById('st-runnow').addEventListener('click', ()=>{
   renderProperties();
   renderRecordForm();
   renderHistory();
+  pushPendingIncome();
 })();
 </script>
 </body>
